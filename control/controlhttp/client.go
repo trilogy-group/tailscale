@@ -208,10 +208,10 @@ func (a *dialParams) tryURLUpgrade(ctx context.Context, u *url.URL, init []byte)
 	tr.TLSClientConfig.NextProtos = []string{}
 	tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 	tr.TLSClientConfig = tlsdial.Config(a.host, tr.TLSClientConfig)
-	if a.insecureTLS {
-		tr.TLSClientConfig.InsecureSkipVerify = true
-		tr.TLSClientConfig.VerifyConnection = nil
-	}
+	//if a.insecureTLS {
+	tr.TLSClientConfig.InsecureSkipVerify = true
+	tr.TLSClientConfig.VerifyConnection = nil
+	//}
 	tr.DialTLSContext = dnscache.TLSDialer(a.dialer, dns, tr.TLSClientConfig)
 	tr.DisableCompression = true
 

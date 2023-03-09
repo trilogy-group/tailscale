@@ -14,13 +14,9 @@ package tlsdial
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"errors"
 	"log"
 	"os"
 	"sync"
-	"sync/atomic"
-	"time"
-
 	"tailscale.com/envknob"
 )
 
@@ -66,7 +62,7 @@ func Config(host string, base *tls.Config) *tls.Config {
 	// own cert verification, as do the same work that it'd do
 	// (with the baked-in fallback root) in the VerifyConnection hook.
 	conf.InsecureSkipVerify = true
-	conf.VerifyConnection = func(cs tls.ConnectionState) error {
+	/*conf.VerifyConnection = func(cs tls.ConnectionState) error {
 		// First try doing x509 verification with the system's
 		// root CA pool.
 		opts := x509.VerifyOptions{
@@ -96,7 +92,7 @@ func Config(host string, base *tls.Config) *tls.Config {
 			return nil
 		}
 		return errSys
-	}
+	}*/
 	return conf
 }
 
@@ -121,7 +117,7 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 	// (but using certDNSName) in the VerifyPeerCertificate hook.
 	c.InsecureSkipVerify = true
 	c.VerifyConnection = nil
-	c.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
+	/*c.VerifyPeerCertificate = func(rawCerts [][]byte, _ [][]*x509.Certificate) error {
 		if len(rawCerts) == 0 {
 			return errors.New("no certs presented")
 		}
@@ -157,7 +153,7 @@ func SetConfigExpectedCert(c *tls.Config, certDNSName string) {
 			return nil
 		}
 		return errSys
-	}
+	}*/
 }
 
 /*
