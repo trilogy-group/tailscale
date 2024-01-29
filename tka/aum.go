@@ -1,6 +1,5 @@
-// Copyright (c) 2022 Tailscale Inc & AUTHORS All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
 
 package tka
 
@@ -45,6 +44,11 @@ func (h AUMHash) MarshalText() ([]byte, error) {
 	return b, nil
 }
 
+// IsZero returns true if the hash is the empty value.
+func (h AUMHash) IsZero() bool {
+	return h == (AUMHash{})
+}
+
 // AUMKind describes valid AUM types.
 type AUMKind uint8
 
@@ -55,14 +59,10 @@ const (
 	//
 	// Only the Key optional field may be set.
 	AUMAddKey
-	// A RemoveKey AUM describes hte removal of a key trusted by TKA.
+	// A RemoveKey AUM describes the removal of a key trusted by TKA.
 	//
 	// Only the KeyID optional field may be set.
 	AUMRemoveKey
-	// A DisableNL AUM describes the disablement of TKA.
-	//
-	// Only the DisablementSecret optional field may be set.
-	AUMDisableNL
 	// A NoOp AUM carries no information and is used in tests.
 	AUMNoOp
 	// A UpdateKey AUM updates the metadata or votes of an existing key.
@@ -84,8 +84,6 @@ func (k AUMKind) String() string {
 		return "add-key"
 	case AUMRemoveKey:
 		return "remove-key"
-	case AUMDisableNL:
-		return "disable-nl"
 	case AUMNoOp:
 		return "no-op"
 	case AUMCheckpoint:
@@ -130,15 +128,10 @@ type AUM struct {
 	// This field is used for Checkpoint AUMs.
 	State *State `cbor:"5,keyasint,omitempty"`
 
-	// DisablementSecret is used to transmit a secret for disabling
-	// the TKA.
-	// This field is used for DisableNL AUMs.
-	DisablementSecret []byte `cbor:"6,keyasint,omitempty"`
-
 	// Votes and Meta describe properties of a key in the key authority.
 	// These fields are used for UpdateKey AUMs.
-	Votes *uint             `cbor:"7,keyasint,omitempty"`
-	Meta  map[string]string `cbor:"8,keyasint,omitempty"`
+	Votes *uint             `cbor:"6,keyasint,omitempty"`
+	Meta  map[string]string `cbor:"7,keyasint,omitempty"`
 
 	// Signatures lists the signatures over this AUM.
 	// CBOR key 23 is the last key which can be encoded as a single byte.
@@ -156,7 +149,7 @@ func (a *AUM) StaticValidate() error {
 		return errors.New("absent parent must be represented by a nil slice")
 	}
 	for i, sig := range a.Signatures {
-		if len(sig.KeyID) == 0 || len(sig.Signature) != ed25519.SignatureSize {
+		if len(sig.KeyID) != 32 || len(sig.Signature) != ed25519.SignatureSize {
 			return fmt.Errorf("signature %d has missing keyID or malformed signature", i)
 		}
 	}
@@ -172,14 +165,14 @@ func (a *AUM) StaticValidate() error {
 		if a.Key == nil {
 			return errors.New("AddKey AUMs must contain a key")
 		}
-		if a.KeyID != nil || a.DisablementSecret != nil || a.State != nil || a.Votes != nil || a.Meta != nil {
+		if a.KeyID != nil || a.State != nil || a.Votes != nil || a.Meta != nil {
 			return errors.New("AddKey AUMs may only specify a Key")
 		}
 	case AUMRemoveKey:
 		if len(a.KeyID) == 0 {
 			return errors.New("RemoveKey AUMs must specify a key ID")
 		}
-		if a.Key != nil || a.DisablementSecret != nil || a.State != nil || a.Votes != nil || a.Meta != nil {
+		if a.Key != nil || a.State != nil || a.Votes != nil || a.Meta != nil {
 			return errors.New("RemoveKey AUMs may only specify a KeyID")
 		}
 	case AUMUpdateKey:
@@ -189,30 +182,37 @@ func (a *AUM) StaticValidate() error {
 		if a.Meta == nil && a.Votes == nil {
 			return errors.New("UpdateKey AUMs must contain an update to votes or key metadata")
 		}
-		if a.Key != nil || a.DisablementSecret != nil || a.State != nil {
+		if a.Key != nil || a.State != nil {
 			return errors.New("UpdateKey AUMs may only specify KeyID, Votes, and Meta")
 		}
 	case AUMCheckpoint:
 		if a.State == nil {
 			return errors.New("Checkpoint AUMs must specify the state")
 		}
-		if a.KeyID != nil || a.DisablementSecret != nil || a.Key != nil || a.Votes != nil || a.Meta != nil {
+		if a.KeyID != nil || a.Key != nil || a.Votes != nil || a.Meta != nil {
 			return errors.New("Checkpoint AUMs may only specify State")
 		}
-	case AUMDisableNL:
-		if len(a.DisablementSecret) == 0 {
-			return errors.New("DisableNL AUMs must specify a disablement secret")
-		}
-		if a.KeyID != nil || a.State != nil || a.Key != nil || a.Votes != nil || a.Meta != nil {
-			return errors.New("DisableNL AUMs may only specify a disablement secret")
-		}
+
+	case AUMNoOp:
+	default:
+		// An AUM with an unknown message kind was received! That means
+		// that a future version of tailscaled added some feature we don't
+		// understand.
+		//
+		// The future-compatibility contract for AUM message types is that
+		// they must only add new features, not change the semantics of existing
+		// mechanisms or features. As such, old clients can safely ignore them.
 	}
 
 	return nil
 }
 
 // Serialize returns the given AUM in a serialized format.
-func (a *AUM) Serialize() []byte {
+//
+// We would implement encoding.BinaryMarshaler, except that would
+// unfortunately get called by the cbor marshaller resulting in infinite
+// recursion.
+func (a *AUM) Serialize() tkatype.MarshaledAUM {
 	// Why CBOR and not something like JSON?
 	//
 	// The main function of an AUM is to carry signed data. Signatures are
@@ -243,6 +243,16 @@ func (a *AUM) Serialize() []byte {
 	return out.Bytes()
 }
 
+// Unserialize decodes bytes representing a marshaled AUM.
+//
+// We would implement encoding.BinaryUnmarshaler, except that would
+// unfortunately get called by the cbor unmarshaller resulting in infinite
+// recursion.
+func (a *AUM) Unserialize(data []byte) error {
+	dec, _ := cborDecOpts.DecMode()
+	return dec.Unmarshal(data, a)
+}
+
 // Hash returns a cryptographic digest of all AUM contents.
 func (a *AUM) Hash() AUMHash {
 	return blake2s.Sum256(a.Serialize())
@@ -270,14 +280,20 @@ func (a *AUM) Parent() (h AUMHash, ok bool) {
 	return h, false
 }
 
-func (a *AUM) sign25519(priv ed25519.PrivateKey) {
+func (a *AUM) sign25519(priv ed25519.PrivateKey) error {
 	key := Key{Kind: Key25519, Public: priv.Public().(ed25519.PublicKey)}
 	sigHash := a.SigHash()
 
+	keyID, err := key.ID()
+	if err != nil {
+		return err
+	}
+
 	a.Signatures = append(a.Signatures, tkatype.Signature{
-		KeyID:     key.ID(),
+		KeyID:     keyID,
 		Signature: ed25519.Sign(priv, sigHash[:]),
 	})
+	return nil
 }
 
 // Weight computes the 'signature weight' of the AUM

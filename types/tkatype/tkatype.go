@@ -1,6 +1,5 @@
-// Copyright (c) 2022 Tailscale Inc & AUTHORS All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
 
 // Package tkatype defines types for working with the tka package.
 //
@@ -22,9 +21,16 @@ type KeyID []byte
 // MarshaledSignature represents a marshaled tka.NodeKeySignature.
 type MarshaledSignature []byte
 
+// MarshaledAUM represents a marshaled tka.AUM.
+type MarshaledAUM []byte
+
 // AUMSigHash represents the BLAKE2s digest of an Authority Update
 // Message (AUM), sans any signatures.
 type AUMSigHash [32]byte
+
+// NKSSigHash represents the BLAKE2s digest of a Node-Key Signature (NKS),
+// sans the Signature field if present.
+type NKSSigHash [32]byte
 
 // Signature describes a signature over an AUM, which can be verified
 // using the key referenced by KeyID.

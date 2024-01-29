@@ -1,6 +1,5 @@
-// Copyright (c) 2022 Tailscale Inc & AUTHORS All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
 
 // Package views provides read-only accessors for commonly used
 // value types.
@@ -11,6 +10,7 @@ import (
 	"errors"
 	"net/netip"
 
+	"golang.org/x/exp/slices"
 	"tailscale.com/net/tsaddr"
 )
 
@@ -75,6 +75,15 @@ func (v SliceView[T, V]) Len() int { return len(v.ж) }
 // At returns a View of the element at index `i` of the slice.
 func (v SliceView[T, V]) At(i int) V { return v.ж[i].View() }
 
+// SliceFrom returns v[i:].
+func (v SliceView[T, V]) SliceFrom(i int) SliceView[T, V] { return SliceView[T, V]{v.ж[i:]} }
+
+// SliceTo returns v[:i]
+func (v SliceView[T, V]) SliceTo(i int) SliceView[T, V] { return SliceView[T, V]{v.ж[:i]} }
+
+// Slice returns v[i:j]
+func (v SliceView[T, V]) Slice(i, j int) SliceView[T, V] { return SliceView[T, V]{v.ж[i:j]} }
+
 // AppendTo appends the underlying slice values to dst.
 func (v SliceView[T, V]) AppendTo(dst []V) []V {
 	for _, x := range v.ж {
@@ -121,6 +130,15 @@ func (v Slice[T]) Len() int { return len(v.ж) }
 
 // At returns the element at index `i` of the slice.
 func (v Slice[T]) At(i int) T { return v.ж[i] }
+
+// SliceFrom returns v[i:].
+func (v Slice[T]) SliceFrom(i int) Slice[T] { return Slice[T]{v.ж[i:]} }
+
+// SliceTo returns v[:i]
+func (v Slice[T]) SliceTo(i int) Slice[T] { return Slice[T]{v.ж[:i]} }
+
+// Slice returns v[i:j]
+func (v Slice[T]) Slice(i, j int) Slice[T] { return Slice[T]{v.ж[i:j]} }
 
 // AppendTo appends the underlying slice values to dst.
 func (v Slice[T]) AppendTo(dst []T) []T {
@@ -169,6 +187,37 @@ func SliceContains[T comparable](v Slice[T], e T) bool {
 	return false
 }
 
+// SliceEqualAnyOrder reports whether a and b contain the same elements, regardless of order.
+// The underlying slices for a and b can be nil.
+func SliceEqualAnyOrder[T comparable](a, b Slice[T]) bool {
+	if a.Len() != b.Len() {
+		return false
+	}
+
+	var diffStart int // beginning index where a and b differ
+	for n := a.Len(); diffStart < n; diffStart++ {
+		if a.At(diffStart) != b.At(diffStart) {
+			break
+		}
+	}
+	if diffStart == a.Len() {
+		return true
+	}
+
+	// count the occurrences of remaining values and compare
+	valueCount := make(map[T]int)
+	for i, n := diffStart, a.Len(); i < n; i++ {
+		valueCount[a.At(i)]++
+		valueCount[b.At(i)]--
+	}
+	for _, count := range valueCount {
+		if count != 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // IPPrefixSlice is a read-only accessor for a slice of netip.Prefix.
 type IPPrefixSlice struct {
 	ж Slice[netip.Prefix]
@@ -201,6 +250,11 @@ func (v IPPrefixSlice) AsSlice() []netip.Prefix {
 	return v.ж.AsSlice()
 }
 
+// Filter returns a new slice, containing elements of v that match f.
+func (v IPPrefixSlice) Filter(f func(netip.Prefix) bool) []netip.Prefix {
+	return tsaddr.FilterPrefixesCopy(v.ж.ж, f)
+}
+
 // PrefixesContainsIP reports whether any IPPrefix contains IP.
 func (v IPPrefixSlice) ContainsIP(ip netip.Addr) bool {
 	return tsaddr.PrefixesContainsIP(v.ж.ж, ip)
@@ -208,12 +262,23 @@ func (v IPPrefixSlice) ContainsIP(ip netip.Addr) bool {
 
 // PrefixesContainsFunc reports whether f is true for any IPPrefix in the slice.
 func (v IPPrefixSlice) ContainsFunc(f func(netip.Prefix) bool) bool {
-	return tsaddr.PrefixesContainsFunc(v.ж.ж, f)
+	return slices.ContainsFunc(v.ж.ж, f)
 }
 
 // ContainsExitRoutes reports whether v contains ExitNode Routes.
 func (v IPPrefixSlice) ContainsExitRoutes() bool {
 	return tsaddr.ContainsExitRoutes(v.ж.ж)
+}
+
+// ContainsNonExitSubnetRoutes reports whether v contains Subnet
+// Routes other than ExitNode Routes.
+func (v IPPrefixSlice) ContainsNonExitSubnetRoutes() bool {
+	for i := 0; i < v.Len(); i++ {
+		if v.At(i).Bits() != 0 {
+			return true
+		}
+	}
+	return false
 }
 
 // MarshalJSON implements json.Marshaler.

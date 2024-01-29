@@ -1,6 +1,5 @@
-// Copyright (c) 2022 Tailscale Inc & AUTHORS All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
 
 // Viewer is a tool to automate the creation of "view" wrapper types that
 // provide read-only accessor methods to underlying fields.
@@ -327,6 +326,8 @@ var (
 	flagTypes     = flag.String("type", "", "comma-separated list of types; required")
 	flagBuildTags = flag.String("tags", "", "compiler build tags to apply")
 	flagCloneFunc = flag.Bool("clonefunc", false, "add a top-level Clone func")
+
+	flagCloneOnlyTypes = flag.String("clone-only-type", "", "comma-separated list of types (a subset of --type) that should only generate a go:generate clone line and not actual views")
 )
 
 func main() {
@@ -353,10 +354,18 @@ func main() {
 	}
 	it := codegen.NewImportTracker(pkg.Types)
 
+	cloneOnlyType := map[string]bool{}
+	for _, t := range strings.Split(*flagCloneOnlyTypes, ",") {
+		cloneOnlyType[t] = true
+	}
+
 	buf := new(bytes.Buffer)
 	fmt.Fprintf(buf, "//go:generate go run tailscale.com/cmd/cloner  %s\n\n", strings.Join(flagArgs, " "))
 	runCloner := false
 	for _, typeName := range typeNames {
+		if cloneOnlyType[typeName] {
+			continue
+		}
 		typ, ok := namedTypes[typeName]
 		if !ok {
 			log.Fatalf("could not find type %s", typeName)
@@ -378,7 +387,7 @@ func main() {
 		log.Fatal(err)
 	}
 	if runCloner {
-		// When a new pacakge is added or when existing generated files have
+		// When a new package is added or when existing generated files have
 		// been deleted, we might run into a case where tailscale.com/cmd/cloner
 		// has not run yet. We detect this by verifying that all the structs we
 		// interacted with have had Clone method already generated. If they
