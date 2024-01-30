@@ -11,7 +11,7 @@
 </head>
 
 <body class="py-14">
-<main class="container max-w-lg mx-auto py-6 px-8 bg-white rounded-md shadow-2xl" style="width: 95%">
+<main class="container max-w-lg mx-auto mb-8 py-6 px-8 bg-white rounded-md shadow-2xl" style="width: 95%">
 	<header class="flex justify-between items-center min-width-0 py-2 mb-8">
 		<svg width="26" height="26" viewBox="0 0 23 23" title="Tailscale" fill="none" xmlns="http://www.w3.org/2000/svg"
 			class="flex-shrink-0 mr-4">
@@ -26,10 +26,14 @@
 			<circle opacity="0.2" cx="19.5" cy="19.5" r="2.7" fill="currentColor"></circle>
 		</svg>
 		<div class="flex items-center justify-end space-x-2 w-2/3">
-			{{ with .Profile.LoginName }}
-			<div class="text-right truncate leading-4">
-				<h4 class="truncate leading-normal">{{.}}</h4>
-				<a href="#" class="text-xs text-gray-500 hover:text-gray-700 js-loginButton">Switch account</a>
+			{{ with .Profile }}
+			<div class="text-right w-full leading-4">
+				<h4 class="truncate leading-normal">{{.LoginName}}</h4>
+				<div class="text-xs text-gray-500 text-right">
+					<a href="#" class="hover:text-gray-700 js-loginButton">Switch account</a> | <a href="#"
+						class="hover:text-gray-700 js-loginButton">Reauthenticate</a> | <a href="#"
+						class="hover:text-gray-700 js-logoutButton">Logout</a>
+				</div>
 			</div>
 			{{ end }}
 			<div class="relative flex-shrink-0 w-8 h-8 rounded-full overflow-hidden">
@@ -44,7 +48,7 @@
 	</header>
 	{{ if .IP }}
 	<div
-		class="border border-gray-200 bg-gray-0 rounded-lg p-2 pl-3 pr-3 mb-8 width-full flex items-center justify-between">
+		class="border border-gray-200 bg-gray-0 rounded-md p-2 pl-3 pr-3 width-full flex items-center justify-between">
 		<div class="flex items-center min-width-0">
 			<svg class="flex-shrink-0 text-gray-600 mr-3 ml-1" xmlns="http://www.w3.org/2000/svg" width="20" height="20"
 				viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"
@@ -54,10 +58,21 @@
 				<line x1="6" y1="6" x2="6.01" y2="6"></line>
 				<line x1="6" y1="18" x2="6.01" y2="18"></line>
 			</svg>
-			<h4 class="font-semibold truncate mr-2">{{.DeviceName}}</h4>
+			<div>
+				<h4 class="font-semibold truncate mr-2">{{.DeviceName}}</h4>
+			</div>
 		</div>
 		<h5>{{.IP}}</h5>
 	</div>
+	<p class="mt-1 ml-1 mb-6 text-xs text-gray-600">
+		Debug info: Tailscale {{ .IPNVersion }}, tun={{.TUNMode}}{{ if .IsSynology }}, DSM{{ .DSMVersion}}
+			{{if not .TUNMode}}
+			(<a href="https://tailscale.com/kb/1152/synology-outbound/" class="link-underline text-gray-600" target="_blank"
+				aria-label="Configure outbound synology traffic"
+				rel="noopener noreferrer">outgoing access not configured</a>)
+			{{end}}
+		{{end}}
+	</p>
 	{{ end }}
 	{{ if or (eq .Status "NeedsLogin") (eq .Status "NoState") }}
 	{{ if .IP }}
@@ -95,18 +110,21 @@
 		{{end}}
 	</a>
 	</div>
-	<div class="mb-4">
-		<a href="#" class="mb-4 link font-medium js-loginButton" target="_blank">Reauthenticate</a>
-	</div>
 	{{ end }}
 </main>
+<footer class="container max-w-lg mx-auto text-center">
+	<a class="text-xs text-gray-500 hover:text-gray-600" href="{{ .LicensesURL }}">Open Source Licenses</a>
+</footer>
 <script>(function () {
-const advertiseExitNode = {{.AdvertiseExitNode}};
+const advertiseExitNode = {{ .AdvertiseExitNode }};
+const isUnraid = {{ .IsUnraid }};
+const unraidCsrfToken = "{{ .UnraidToken }}";
 let fetchingUrl = false;
 var data = {
-	AdvertiseRoutes: "{{.AdvertiseRoutes}}",
+	AdvertiseRoutes: "{{ .AdvertiseRoutes }}",
 	AdvertiseExitNode: advertiseExitNode,
-	Reauthenticate: false
+	Reauthenticate: false,
+	ForceLogout: false
 };
 
 function postData(e) {
@@ -125,15 +143,27 @@ function postData(e) {
 	}
 	const nextUrl = new URL(window.location);
 	nextUrl.search = nextParams.toString()
-	const url = nextUrl.toString();
 
+	let body = JSON.stringify(data);
+	let contentType = "application/json";
+
+	if (isUnraid) {
+		const params = new URLSearchParams();
+		params.append("csrf_token", unraidCsrfToken);
+		params.append("ts_data", JSON.stringify(data));
+
+		body = params.toString();
+		contentType = "application/x-www-form-urlencoded;charset=UTF-8";
+	}
+
+	const url = nextUrl.toString();
 	fetch(url, {
 		method: "POST",
 		headers: {
 			"Accept": "application/json",
-			"Content-Type": "application/json",
+			"Content-Type": contentType,
 		},
-		body: JSON.stringify(data)
+		body: body
 	}).then(res => res.json()).then(res => {
 		fetchingUrl = false;
 		const err = res["error"];
@@ -142,22 +172,32 @@ function postData(e) {
 		}
 		const url = res["url"];
 		if (url) {
-			document.location.href = url;
+			if(isUnraid) {
+				window.open(url, "_blank");
+			} else {
+				document.location.href = url;
+			}
 		} else {
 			location.reload();
 		}
 	}).catch(err => {
-		alert("Failed to log in: " + err.message);
+		alert("Failed operation: " + err.message);
 	});
 }
 
-Array.from(document.querySelectorAll(".js-loginButton")).forEach(el => {
+document.querySelectorAll(".js-loginButton").forEach(function (el){
 	el.addEventListener("click", function(e) {
 		data.Reauthenticate = true;
 		postData(e);
 	});
 })
-Array.from(document.querySelectorAll(".js-advertiseExitNode")).forEach(el => {
+document.querySelectorAll(".js-logoutButton").forEach(function(el) {
+	el.addEventListener("click", function (e) {
+		data.ForceLogout = true;
+		postData(e);
+	});
+})
+document.querySelectorAll(".js-advertiseExitNode").forEach(function (el) {
 	el.addEventListener("click", function(e) {
 		data.AdvertiseExitNode = !advertiseExitNode;
 		postData(e);

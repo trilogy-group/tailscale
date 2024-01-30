@@ -1,6 +1,5 @@
-// Copyright (c) 2022 Tailscale Inc & AUTHORS All rights reserved.
-// Use of this source code is governed by a BSD-style
-// license that can be found in the LICENSE file.
+// Copyright (c) Tailscale Inc & AUTHORS
+// SPDX-License-Identifier: BSD-3-Clause
 
 package tka
 
@@ -16,6 +15,8 @@ type scenarioNode struct {
 	Name string
 	A    *Authority
 	AUMs map[string]AUM
+
+	storage Chonk
 }
 
 type scenarioTest struct {
@@ -30,7 +31,8 @@ type scenarioTest struct {
 }
 
 func (s *scenarioTest) mkNode(name string) *scenarioNode {
-	authority, err := Open(s.initial.Chonk())
+	storage := s.initial.Chonk()
+	authority, err := Open(storage)
 	if err != nil {
 		s.t.Fatal(err)
 	}
@@ -41,9 +43,10 @@ func (s *scenarioTest) mkNode(name string) *scenarioNode {
 	}
 
 	n := &scenarioNode{
-		A:    authority,
-		AUMs: aums,
-		Name: name,
+		A:       authority,
+		AUMs:    aums,
+		Name:    name,
+		storage: storage,
 	}
 
 	s.nodes[name] = n
@@ -63,7 +66,7 @@ func (s *scenarioTest) mkNodeWithForks(name string, signWithDefault bool, chains
 	for parentName, chain := range chains {
 		parent, exists := n.AUMs[parentName]
 		if !exists {
-			panic("cannot use non-existent parent: " + parentName)
+			panic("cannot use nonexistent parent: " + parentName)
 		}
 		parentHash := parent.Hash()
 		chain.Nodes[chain.FirstIdent].ParentHash = &parentHash
@@ -89,7 +92,7 @@ func (s *scenarioTest) mkNodeWithForks(name string, signWithDefault bool, chains
 			}
 			return false
 		})
-		if err := n.A.Inform(aums); err != nil {
+		if err := n.A.Inform(n.storage, aums); err != nil {
 			panic(err)
 		}
 	}
@@ -114,27 +117,27 @@ outer:
 }
 
 func (s *scenarioTest) syncBetween(n1, n2 *scenarioNode) error {
-	o1, err := n1.A.SyncOffer()
+	o1, err := n1.A.SyncOffer(n1.storage)
 	if err != nil {
 		return err
 	}
-	o2, err := n2.A.SyncOffer()
+	o2, err := n2.A.SyncOffer(n2.storage)
 	if err != nil {
 		return err
 	}
 
-	aumsFrom1, err := n1.A.MissingAUMs(o2)
+	aumsFrom1, err := n1.A.MissingAUMs(n1.storage, o2)
 	if err != nil {
 		return err
 	}
-	aumsFrom2, err := n2.A.MissingAUMs(o1)
+	aumsFrom2, err := n2.A.MissingAUMs(n2.storage, o1)
 	if err != nil {
 		return err
 	}
-	if err := n2.A.Inform(aumsFrom1); err != nil {
+	if err := n2.A.Inform(n2.storage, aumsFrom1); err != nil {
 		return err
 	}
-	if err := n1.A.Inform(aumsFrom2); err != nil {
+	if err := n1.A.Inform(n1.storage, aumsFrom2); err != nil {
 		return err
 	}
 	return nil
@@ -165,7 +168,7 @@ func testScenario(t *testing.T, sharedChain string, sharedOptions ...testchainOp
 	sharedOptions = append(sharedOptions,
 		optTemplate("genesis", AUM{MessageKind: AUMCheckpoint, State: &State{
 			Keys:               []Key{key},
-			DisablementSecrets: [][]byte{disablementKDF([]byte{1, 2, 3})},
+			DisablementSecrets: [][]byte{DisablementKDF([]byte{1, 2, 3})},
 		}}),
 		optKey("key", key, priv),
 		optSignAllUsing("key"))
@@ -212,7 +215,7 @@ func TestScenarioHelpers(t *testing.T) {
 	s.checkHaveConsensus(control, n)
 }
 
-func TestNormalPropergation(t *testing.T) {
+func TestNormalPropagation(t *testing.T) {
 	s := testScenario(t, `
         G -> L1 -> L2
         G.template = genesis
@@ -238,7 +241,7 @@ func TestNormalPropergation(t *testing.T) {
 	s.checkHaveConsensus(n1, n2)
 }
 
-func TestForkingPropergation(t *testing.T) {
+func TestForkingPropagation(t *testing.T) {
 	pub, priv := testingKey25519(t, 2)
 	key := Key{Kind: Key25519, Public: pub, Votes: 2}
 
@@ -269,24 +272,24 @@ func TestForkingPropergation(t *testing.T) {
              F1.template = removeKey1`,
 			optSignAllUsing("key2"),
 			optKey("key2", key, priv),
-			optTemplate("removeKey1", AUM{MessageKind: AUMRemoveKey, KeyID: s.defaultKey.ID()})),
+			optTemplate("removeKey1", AUM{MessageKind: AUMRemoveKey, KeyID: s.defaultKey.MustID()})),
 	})
 	s.testSyncsBetween(control, n2)
 	s.checkHaveConsensus(control, n2)
 
-	// No wozzles propergating from n2->CTRL, what about CTRL->n1?
+	// No wozzles propagating from n2->CTRL, what about CTRL->n1?
 	s.testSyncsBetween(control, n1)
 	s.checkHaveConsensus(n1, n2)
 
-	if _, err := n1.A.state.GetKey(s.defaultKey.ID()); err != ErrNoSuchKey {
+	if _, err := n1.A.state.GetKey(s.defaultKey.MustID()); err != ErrNoSuchKey {
 		t.Error("default key was still present")
 	}
-	if _, err := n1.A.state.GetKey(key.ID()); err != nil {
+	if _, err := n1.A.state.GetKey(key.MustID()); err != nil {
 		t.Errorf("key2 was not trusted: %v", err)
 	}
 }
 
-func TestInvalidAUMPropergationRejected(t *testing.T) {
+func TestInvalidAUMPropagationRejected(t *testing.T) {
 	s := testScenario(t, `
         G -> L1 -> L2
         G.template = genesis
@@ -301,9 +304,11 @@ func TestInvalidAUMPropergationRejected(t *testing.T) {
 	l3 := n1.AUMs["L3"]
 	l3H := l3.Hash()
 	l4 := AUM{MessageKind: AUMAddKey, PrevAUMHash: l3H[:]}
-	l4.sign25519(s.defaultPriv)
+	if err := l4.sign25519(s.defaultPriv); err != nil {
+		t.Fatal(err)
+	}
 	l4H := l4.Hash()
-	n1.A.storage.CommitVerifiedAUMs([]AUM{l4})
+	n1.storage.CommitVerifiedAUMs([]AUM{l4})
 	n1.A.state.LastAUMHash = &l4H
 
 	// Does control nope out with syncing?
@@ -320,7 +325,7 @@ func TestInvalidAUMPropergationRejected(t *testing.T) {
 	}
 }
 
-func TestUnsignedAUMPropergationRejected(t *testing.T) {
+func TestUnsignedAUMPropagationRejected(t *testing.T) {
 	s := testScenario(t, `
         G -> L1 -> L2
         G.template = genesis
@@ -336,7 +341,7 @@ func TestUnsignedAUMPropergationRejected(t *testing.T) {
 	l3H := l3.Hash()
 	l4 := AUM{MessageKind: AUMNoOp, PrevAUMHash: l3H[:]}
 	l4H := l4.Hash()
-	n1.A.storage.CommitVerifiedAUMs([]AUM{l4})
+	n1.storage.CommitVerifiedAUMs([]AUM{l4})
 	n1.A.state.LastAUMHash = &l4H
 
 	// Does control nope out with syncing?
@@ -353,7 +358,7 @@ func TestUnsignedAUMPropergationRejected(t *testing.T) {
 	}
 }
 
-func TestBadSigAUMPropergationRejected(t *testing.T) {
+func TestBadSigAUMPropagationRejected(t *testing.T) {
 	s := testScenario(t, `
         G -> L1 -> L2
         G.template = genesis
@@ -367,10 +372,12 @@ func TestBadSigAUMPropergationRejected(t *testing.T) {
 	l3 := n1.AUMs["L3"]
 	l3H := l3.Hash()
 	l4 := AUM{MessageKind: AUMNoOp, PrevAUMHash: l3H[:]}
-	l4.sign25519(s.defaultPriv)
+	if err := l4.sign25519(s.defaultPriv); err != nil {
+		t.Fatal(err)
+	}
 	l4.Signatures[0].Signature[3] = 42
 	l4H := l4.Hash()
-	n1.A.storage.CommitVerifiedAUMs([]AUM{l4})
+	n1.storage.CommitVerifiedAUMs([]AUM{l4})
 	n1.A.state.LastAUMHash = &l4H
 
 	// Does control nope out with syncing?
